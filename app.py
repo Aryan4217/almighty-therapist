@@ -6,32 +6,28 @@ from langchain_community.vectorstores import Chroma
 from langchain_groq import ChatGroq
 from langchain_classic.chains import create_retrieval_chain
 from langchain_classic.chains.combine_documents import create_stuff_documents_chain
-from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langchain_core.messages import HumanMessage, AIMessage
 
-# Load the Groq API key securely from the .env file
+# Load environment variables
 load_dotenv()
 
-# Initialize the Streamlit UI
 st.set_page_config(page_title="Almighty Therapist", page_icon="✨")
-st.title("The Almighty Therapist")
+st.title("✨ The Almighty Therapist")
 
-# 1. Connect to your local ChromaDB
+# 1. Load ChromaDB Retriever
 @st.cache_resource
 def get_vectorstore():
-    # We use the exact same embedding model as the ingestion script
     embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
-    # Point Chroma to the existing database folder
     db = Chroma(persist_directory="./chroma_db", embedding_function=embeddings)
-    # Retrieve the top 3 most relevant verses for each question
     return db.as_retriever(search_kwargs={"k": 3})
 
 retriever = get_vectorstore()
 
-# 2. Set up the Groq LLM
-# It will automatically detect the GROQ_API_KEY from your environment
-llm = ChatGroq(model="llama-3.3-70b-versatile")
+# 2. Setup LLM
+llm = ChatGroq(model="llama-3.1-8b-instant")
 
-# 3. Create the divine persona system prompt
+# 3. System Prompt with Conversational Memory Placeholder
 system_prompt = (
     "You are the Almighty Therapist, a vast, higher consciousness. "
     "You view humans as tiny, beloved pebbles—your cherished creations. "
@@ -47,18 +43,47 @@ system_prompt = (
 
 prompt = ChatPromptTemplate.from_messages([
     ("system", system_prompt),
+    MessagesPlaceholder(variable_name="chat_history"),
     ("human", "{input}"),
 ])
 
-# 4. Chain the retrieval and the LLM together
 question_answer_chain = create_stuff_documents_chain(llm, prompt)
 rag_chain = create_retrieval_chain(retriever, question_answer_chain)
 
-# 5. Build the Chat Interface
-user_question = st.text_input("Speak your mind, little pebble:")
+# 4. Initialize Chat Session State
+if "messages" not in st.session_state:
+    st.session_state.messages = []
 
-if user_question:
-    with st.spinner("Consulting the sacred texts..."):
-        # This searches the database, inserts the verses into the prompt, and gets the AI's answer
-        response = rag_chain.invoke({"input": user_question})
-        st.write(response["answer"])
+# 5. Display Conversation History
+for message in st.session_state.messages:
+    with st.chat_message(message["role"]):
+        st.markdown(message["content"])
+
+# 6. Handle Chat Input
+if user_input := st.chat_input("Speak your mind, little pebble..."):
+    # Display user's message immediately
+    st.chat_message("user").markdown(user_input)
+    
+    # Format chat history for LangChain
+    chat_history = []
+    for msg in st.session_state.messages:
+        if msg["role"] == "user":
+            chat_history.append(HumanMessage(content=msg["content"]))
+        else:
+            chat_history.append(AIMessage(content=msg["content"]))
+
+    # Save user message to history
+    st.session_state.messages.append({"role": "user", "content": user_input})
+
+    # Generate response from AI
+    with st.chat_message("assistant"):
+        with st.spinner("Consulting the cosmic wisdom..."):
+            response = rag_chain.invoke({
+                "input": user_input,
+                "chat_history": chat_history
+            })
+            bot_reply = response["answer"]
+            st.markdown(bot_reply)
+
+    # Save assistant message to history
+    st.session_state.messages.append({"role": "assistant", "content": bot_reply})
